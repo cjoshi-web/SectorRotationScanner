@@ -11,7 +11,6 @@ import io
 from datetime import datetime
 import plotly.graph_objects as go
 from st_aggrid import AgGrid, GridOptionsBuilder
-from streamlit_option_menu import option_menu
 
 # --- Setup ---
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -25,10 +24,10 @@ st.set_page_config(
     page_title="Ultimate ETF Scanner",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# Material-like CSS (Dark/Light adaptive)
+# Custom CSS (Material-like)
 st.markdown("""
 <style>
     .main { padding: 0; }
@@ -84,36 +83,11 @@ st.markdown("""
         .metric-card .value { color: #f1f5f9; }
         .app-header { background: linear-gradient(135deg, #0f172a, #1e293b); }
     }
-
-    .css-1d391kg { background-color: #f8f9fa; }
-    .css-1d391kg .stSelectbox, .css-1d391kg .stRadio { margin-top: 0.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # =============================================================
-# SIDEBAR WITH OPTION MENU
-# =============================================================
-with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/000000/stock.png", width=80)
-    st.title("📊 ETF Scanner")
-    selected = option_menu(
-        menu_title=None,
-        options=["Dashboard", "ETF Ranking", "RRG Chart", "About"],
-        icons=["house", "table", "bar-chart", "info-circle"],
-        menu_icon="cast",
-        default_index=0,
-        styles={
-            "container": {"padding": "0!important", "background-color": "#f8f9fa"},
-            "icon": {"color": "#3f51b5", "font-size": "20px"},
-            "nav-link": {"font-size": "16px", "text-align": "left", "margin": "5px 0"},
-            "nav-link-selected": {"background-color": "#3f51b5", "font-weight": "600"},
-        }
-    )
-    st.markdown("---")
-    st.caption(f"🔄 Last scan: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-
-# =============================================================
-# 1. STATIC ETF LIST & MAPPING (FULL)
+# 1. STATIC ETF LIST & MAPPING
 # =============================================================
 ETF_LIST = [
     "LIQUIDCASE", "GROWWLIQID", "NIFTYBEES", "MOSMALL250", "SMALLCAP",
@@ -219,7 +193,7 @@ MACRO_SECTOR_MAP = {
 SCAN_ETFS = [e for e in ETF_LIST if e not in ["LIQUIDCASE", "GROWWLIQID"]]
 
 # =============================================================
-# 2. HELPER FUNCTIONS (FULL)
+# 2. HELPER FUNCTIONS
 # =============================================================
 def calculate_rsi(data, period=14):
     delta = data.diff()
@@ -302,7 +276,7 @@ def cvd_positive(close, high, low, volume, open_):
     return cvd.iloc[-5:].sum() > 0
 
 # =============================================================
-# 3. MAIN SCAN FUNCTION (CACHED – FULL LOGIC)
+# 3. MAIN SCAN FUNCTION (CACHED)
 # =============================================================
 @st.cache_data(ttl=3600)
 def run_scan_cached():
@@ -484,7 +458,7 @@ def run_scan_cached():
 
     df = pd.DataFrame(results)
 
-    # ---- Icons ----
+    # Icons
     df['F3_Icon'] = df['F3'].apply(lambda x: '✅' if x else '❌')
     df['F4_Icon'] = df['F4'].apply(lambda x: '✅' if x else '❌')
     df['F7_Icon'] = df['F7'].apply(lambda x: '✅' if x else '❌')
@@ -655,149 +629,140 @@ if not st.session_state.data_loaded:
             st.session_state.data_loaded = True
             st.rerun()
         else:
-            st.error("No data found.")
+            st.error("No data found. Please try again later.")
             st.stop()
 
 # =============================================================
-# 5. DISPLAY BASED ON SIDEBAR SELECTION
+# 5. DISPLAY EVERYTHING ON ONE PAGE
 # =============================================================
 display_df = st.session_state.display_df
 macro_avg = st.session_state.macro_avg
 
-if selected == "Dashboard":
-    st.markdown("""
-    <div class="app-header">
-        <div>
-            <h1>📈 Ultimate ETF Scanner</h1>
-            <div class="subtitle">23 Filters • Macro RRG • Auto-updated</div>
-        </div>
-        <div style="font-size:0.9rem; opacity:0.8;">{}</div>
+# Header
+st.markdown("""
+<div class="app-header">
+    <div>
+        <h1>📈 Ultimate ETF Scanner</h1>
+        <div class="subtitle">23 Filters • Macro RRG • Auto-updated</div>
     </div>
-    """.format(datetime.now().strftime("%Y-%m-%d %H:%M")), unsafe_allow_html=True)
+    <div style="font-size:0.9rem; opacity:0.8;">{}</div>
+</div>
+""".format(datetime.now().strftime("%Y-%m-%d %H:%M")), unsafe_allow_html=True)
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="label">📊 ETFs Scanned</div>
-            <div class="value">{len(display_df)}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        avg_score = display_df['Filter_Score'].mean()
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="label">⭐ Avg Score</div>
-            <div class="value">{avg_score:.1f}/23</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        top_score = display_df['Filter_Score'].max()
-        top_etf = display_df[display_df['Filter_Score']==top_score]['ETF'].values[0] if top_score>0 else 'N/A'
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="label">🏆 Best Score</div>
-            <div class="value">{top_score} <span style="font-size:1rem;">({top_etf})</span></div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col4:
-        golden = len(display_df[display_df['Benchmark Result']=='🏆 Golden Chance'])
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="label">💎 Golden Chances</div>
-            <div class="value">{golden}</div>
-        </div>
-        """, unsafe_allow_html=True)
+# Metrics Row
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="label">📊 ETFs Scanned</div>
+        <div class="value">{len(display_df)}</div>
+    </div>
+    """, unsafe_allow_html=True)
+with col2:
+    avg_score = display_df['Filter_Score'].mean()
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="label">⭐ Avg Score</div>
+        <div class="value">{avg_score:.1f}/23</div>
+    </div>
+    """, unsafe_allow_html=True)
+with col3:
+    top_score = display_df['Filter_Score'].max()
+    top_etf = display_df[display_df['Filter_Score']==top_score]['ETF'].values[0] if top_score>0 else 'N/A'
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="label">🏆 Best Score</div>
+        <div class="value">{top_score} <span style="font-size:1rem;">({top_etf})</span></div>
+    </div>
+    """, unsafe_allow_html=True)
+with col4:
+    golden = len(display_df[display_df['Benchmark Result']=='🏆 Golden Chance'])
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="label">💎 Golden Chances</div>
+        <div class="value">{golden}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.subheader("📌 Top 10 ETFs by Filter Score")
-    st.dataframe(display_df.head(10)[['ETF', 'Sector', 'Filter_Score', 'RRG - (Sector v/s Nifty)', 'Benchmark Result']], use_container_width=True)
+# Full Interactive Table (AgGrid)
+st.subheader("📋 ETF Ranking")
+gb = GridOptionsBuilder.from_dataframe(display_df)
+gb.configure_pagination(paginationAutoPageSize=True)
+gb.configure_side_bar(filters_panel=True, columns_panel=True)
+gb.configure_grid_options(domLayout='normal')
+gridOptions = gb.build()
+AgGrid(display_df, gridOptions=gridOptions, height=500, width='100%', theme='streamlit', allow_unsafe_jscode=True)
 
-    if st.session_state.warnings:
-        with st.expander("⚠️ Scan Warnings"):
-            for w in st.session_state.warnings[:15]:
-                st.write(w)
+# Download Button
+excel_buffer = io.BytesIO()
+with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+    display_df.to_excel(writer, sheet_name='ETF Ranking', index=True)
+    if macro_avg is not None:
+        macro_avg.to_excel(writer, sheet_name='Macro_RRG', index=False)
+excel_buffer.seek(0)
+st.download_button(
+    label="⬇️ Download Excel Report",
+    data=excel_buffer,
+    file_name=f"ETF_Scan_{datetime.now().strftime('%Y%m%d')}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
+)
 
-elif selected == "ETF Ranking":
-    st.subheader("📋 Full ETF Ranking")
-    gb = GridOptionsBuilder.from_dataframe(display_df)
-    gb.configure_pagination(paginationAutoPageSize=True)
-    gb.configure_side_bar(filters_panel=True, columns_panel=True)
-    gb.configure_grid_options(domLayout='normal')
-    gridOptions = gb.build()
-    AgGrid(display_df, gridOptions=gridOptions, height=600, width='100%', theme='streamlit', allow_unsafe_jscode=True)
-
-    excel_buffer = io.BytesIO()
-    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-        display_df.to_excel(writer, sheet_name='ETF Ranking', index=True)
-        if macro_avg is not None:
-            macro_avg.to_excel(writer, sheet_name='Macro_RRG', index=False)
-    excel_buffer.seek(0)
-    st.download_button(
-        label="⬇️ Download Excel Report",
-        data=excel_buffer,
-        file_name=f"ETF_Scan_{datetime.now().strftime('%Y%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
+# RRG Chart
+st.subheader("📊 RRG Chart – Macro Sector Averages")
+st.caption("🔄 Hover over points for details | Zoom & Pan with mouse")
+if macro_avg is not None and not macro_avg.empty:
+    fig = go.Figure()
+    fig.add_hline(y=0, line_color="black", line_width=1)
+    fig.add_vline(x=1, line_color="black", line_width=1)
+    fig.update_layout(
+        annotations=[
+            dict(x=1.25, y=0.08, text="🏆 LEADING", showarrow=False, font=dict(size=16, color="green", family="Arial Black")),
+            dict(x=0.75, y=0.08, text="🟢 IMPROVING", showarrow=False, font=dict(size=16, color="blue")),
+            dict(x=0.75, y=-0.15, text="🔴 LAGGING", showarrow=False, font=dict(size=16, color="red")),
+            dict(x=1.25, y=-0.15, text="🟡 WEAKENING", showarrow=False, font=dict(size=16, color="orange"))
+        ]
     )
-
-elif selected == "RRG Chart":
-    st.subheader("📊 RRG Chart – Macro Sector Averages")
-    st.caption("🔄 Hover over points for details | Zoom & Pan with mouse")
-    if macro_avg is not None and not macro_avg.empty:
-        fig = go.Figure()
-        fig.add_hline(y=0, line_color="black", line_width=1)
-        fig.add_vline(x=1, line_color="black", line_width=1)
-        fig.update_layout(
-            annotations=[
-                dict(x=1.25, y=0.08, text="🏆 LEADING", showarrow=False, font=dict(size=16, color="green", family="Arial Black")),
-                dict(x=0.75, y=0.08, text="🟢 IMPROVING", showarrow=False, font=dict(size=16, color="blue")),
-                dict(x=0.75, y=-0.15, text="🔴 LAGGING", showarrow=False, font=dict(size=16, color="red")),
-                dict(x=1.25, y=-0.15, text="🟡 WEAKENING", showarrow=False, font=dict(size=16, color="orange"))
-            ]
-        )
-        for idx, row in macro_avg.iterrows():
-            sector = row['Macro_Sector']
-            x = row['RS_Ratio']
-            y = row['RS_Momentum']
-            if x > 1 and y > 0: color, symbol = 'green', 'triangle-up'
-            elif x < 1 and y > 0: color, symbol = 'blue', 'square'
-            elif x < 1 and y < 0: color, symbol = 'red', 'triangle-down'
-            else: color, symbol = 'orange', 'circle'
-            fig.add_trace(go.Scatter(
-                x=[x], y=[y],
-                mode='markers+text',
-                name=sector,
-                marker=dict(size=20, color=color, symbol=symbol, line=dict(width=2, color='black')),
-                text=[sector],
-                textposition='top center',
-                hoverinfo='text',
-                hovertext=f"{sector}<br>RS-Ratio: {x:.3f}<br>RS-Momentum: {y:.3f}"
-            ))
-        fig.update_layout(
-            title=dict(text='📈 Relative Rotation Graph', font=dict(size=20)),
-            xaxis=dict(title='RS-Ratio → 1 = Nifty Avg', range=[0.4, 1.6]),
-            yaxis=dict(title='RS-Momentum (Speed)', range=[-0.4, 0.4]),
-            template='plotly_white',
-            height=700,
-            hovermode='closest',
-            showlegend=False
-        )
-        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
-        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No macro sector data.")
-
+    for idx, row in macro_avg.iterrows():
+        sector = row['Macro_Sector']
+        x = row['RS_Ratio']
+        y = row['RS_Momentum']
+        if x > 1 and y > 0: color, symbol = 'green', 'triangle-up'
+        elif x < 1 and y > 0: color, symbol = 'blue', 'square'
+        elif x < 1 and y < 0: color, symbol = 'red', 'triangle-down'
+        else: color, symbol = 'orange', 'circle'
+        fig.add_trace(go.Scatter(
+            x=[x], y=[y],
+            mode='markers+text',
+            name=sector,
+            marker=dict(size=20, color=color, symbol=symbol, line=dict(width=2, color='black')),
+            text=[sector],
+            textposition='top center',
+            hoverinfo='text',
+            hovertext=f"{sector}<br>RS-Ratio: {x:.3f}<br>RS-Momentum: {y:.3f}"
+        ))
+    fig.update_layout(
+        title=dict(text='📈 Relative Rotation Graph', font=dict(size=20)),
+        xaxis=dict(title='RS-Ratio → 1 = Nifty Avg', range=[0.4, 1.6]),
+        yaxis=dict(title='RS-Momentum (Speed)', range=[-0.4, 0.4]),
+        template='plotly_white',
+        height=700,
+        hovermode='closest',
+        showlegend=False
+    )
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
+    st.plotly_chart(fig, use_container_width=True)
 else:
-    st.subheader("ℹ️ About")
-    st.markdown("""
-    **Ultimate ETF Scanner** uses **23 technical filters** to rank Indian ETFs.
-    - **RRG** (Relative Rotation Graph) compares each ETF against Nifty 50.
-    - **RV** (Relative Valuation) shows if ETF is undervalued vs Nifty.
-    - **Trend, Momentum, Volume, and Reversal** filters give a comprehensive view.
-    - Data sourced from Yahoo Finance (yfinance).
-    Built with ❤️ using Streamlit, Plotly, and AgGrid.
-    """)
+    st.info("No macro sector data available for RRG chart.")
+
+# Warnings (if any)
+if st.session_state.warnings:
+    with st.expander("⚠️ Scan Warnings", expanded=False):
+        for w in st.session_state.warnings[:20]:
+            st.write(w)
+        if len(st.session_state.warnings)>20:
+            st.write(f"... and {len(st.session_state.warnings)-20} more.")
 
 st.markdown("---")
 st.caption("🔄 Data cached for 1 hour. Reload page to refresh scan.")

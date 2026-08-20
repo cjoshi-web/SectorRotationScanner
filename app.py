@@ -208,19 +208,30 @@ def cvd_positive(close, high, low, volume, open_):
     return cvd.iloc[-5:].sum() > 0
 
 # =============================================================
-# 3. MAIN SCAN FUNCTION
+# 3. MAIN SCAN FUNCTION (FIXED NIFTY LOADING)
 # =============================================================
 def run_scan(progress_bar, status_text):
     results = []
     total_etfs = len(SCAN_ETFS)
     
-    # Load Nifty
+    # ========== LOAD NIFTY 50 WITH ERROR HANDLING ==========
     status_text.text("⏳ Loading Nifty 50...")
-    nifty_df = yf.download("^NSEI", period="2y", progress=False)
-    if isinstance(nifty_df.columns, pd.MultiIndex):
-        nifty_df.columns = nifty_df.columns.get_level_values(0)
-    nifty_close = nifty_df['Close'].dropna()
-    nifty_base = nifty_close.iloc[0]
+    try:
+        nifty_df = yf.download("^NSEI", period="2y", progress=False)
+        if isinstance(nifty_df.columns, pd.MultiIndex):
+            nifty_df.columns = nifty_df.columns.get_level_values(0)
+        nifty_close = nifty_df['Close'].dropna()
+        if nifty_close.empty:
+            raise ValueError("Nifty data is empty")
+    except Exception as e:
+        # FALLBACK: Create a dummy series of 1s if Nifty fails
+        # This ensures the rest of the code doesn't crash
+        nifty_close = pd.Series([1.0] * 500, 
+                                index=pd.date_range(end=pd.Timestamp.today(), periods=500, freq='D'))
+        status_text.text("⚠️ Nifty 50 not available, using fallback benchmark.")
+    
+    # Note: 'nifty_base' is removed because it was never used anywhere in the original logic.
+    # =========================================================
 
     for idx, etf_base in enumerate(SCAN_ETFS):
         progress_bar.progress((idx + 1) / total_etfs)
@@ -253,6 +264,7 @@ def run_scan(progress_bar, status_text):
             w_close = w_df['Close']; w_high = w_df['High']; w_low = w_df['Low']; w_vol = w_df['Volume']; w_open = w_df['Open']
             m_close = m_df['Close']; m_high = m_df['High']; m_low = m_df['Low']; m_vol = m_df['Volume']; m_open = m_df['Open']
 
+            # RS Ratio (using the fallback nifty_close if needed)
             rs_ratio = close / nifty_close.reindex(close.index, method='ffill')
             rs_ratio_norm = rs_ratio / rs_ratio.rolling(100).mean()
             rs_mom = rs_ratio / rs_ratio.shift(20) - 1
@@ -361,7 +373,7 @@ def run_scan(progress_bar, status_text):
                 'Risk': 'Near Top' if (close.iloc[-1] / close.rolling(252).max().iloc[-1]) > 0.95 else 'Safe'
             })
         except Exception as e:
-            pass # Skip errors silently as original code did print but we ignore for UI smoothness
+            pass # Silent skip for UI smoothness
 
     return results
 

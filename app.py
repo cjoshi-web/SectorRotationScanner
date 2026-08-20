@@ -9,6 +9,7 @@ import sys
 import os
 import io
 from datetime import datetime
+import plotly.graph_objects as go
 
 # --- Setup ---
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -16,20 +17,39 @@ warnings.filterwarnings("ignore")
 sys.stderr = open(os.devnull, 'w')
 
 st.set_page_config(
-    page_title="ETF Scanner",
+    page_title="Ultimate ETF Scanner",
     page_icon="📈",
     layout="wide"
 )
 
-# Simple clean CSS (Colab-like)
+# --- Clean Modern CSS (no sidebar) ---
 st.markdown("""
 <style>
     .main { padding: 0; }
     .block-container { padding-top: 1rem; padding-bottom: 1rem; }
-    .stDataFrame { width: 100%; }
-    .css-1r6slb0 { background: white; padding: 10px; border-radius: 8px; }
-    h1 { font-size: 2rem; margin-bottom: 0.5rem; }
-    .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    h1 { font-size: 2.2rem; margin-bottom: 0.2rem; color: #1a1a2e; }
+    .subtitle { color: #666; font-size: 0.95rem; margin-bottom: 1.2rem; }
+    .metric-card {
+        background: white;
+        border-radius: 12px;
+        padding: 1rem 0.5rem;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        border-left: 5px solid #4CAF50;
+        transition: 0.2s;
+    }
+    .metric-card:hover { transform: translateY(-3px); box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
+    .metric-card .label { font-size: 0.8rem; color: #888; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+    .metric-card .value { font-size: 2rem; font-weight: 700; color: #1a1a2e; }
+    .stDataFrame { border-radius: 10px; overflow: hidden; }
+    /* Dark mode adjustments */
+    @media (prefers-color-scheme: dark) {
+        .metric-card { background: #1e293b; border-left-color: #5c6bc0; }
+        .metric-card .label { color: #94a3b8; }
+        .metric-card .value { color: #f1f5f9; }
+        h1 { color: #f1f5f9; }
+        .subtitle { color: #94a3b8; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -140,7 +160,7 @@ MACRO_SECTOR_MAP = {
 SCAN_ETFS = [e for e in ETF_LIST if e not in ["LIQUIDCASE", "GROWWLIQID"]]
 
 # =============================================================
-# 2. HELPER FUNCTIONS (EXACT ORIGINAL)
+# 2. HELPER FUNCTIONS (EXACT ORIGINAL – kept unchanged)
 # =============================================================
 def calculate_rsi(data, period=14):
     delta = data.diff()
@@ -223,14 +243,13 @@ def cvd_positive(close, high, low, volume, open_):
     return cvd.iloc[-5:].sum() > 0
 
 # =============================================================
-# 3. MAIN SCAN FUNCTION (CACHED)
+# 3. MAIN SCAN FUNCTION (CACHED) – unchanged
 # =============================================================
 @st.cache_data(ttl=3600)
 def run_scan():
     results = []
     warning_messages = []
     
-    # Load Nifty
     try:
         nifty_df = yf.download("^NSEI", period="2y", progress=False)
         if isinstance(nifty_df.columns, pd.MultiIndex):
@@ -275,7 +294,6 @@ def run_scan():
             if len(common) < 20: continue
             close = close.loc[common]; high = high.loc[common]; low = low.loc[common]; open_ = open_.loc[common]; volume = volume.loc[common]
 
-            # Resample (fixed: 'ME' for month end)
             w_df = df.resample('W').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
             m_df = df.resample('ME').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
             if len(w_df) < 10 or len(m_df) < 3: continue
@@ -283,7 +301,6 @@ def run_scan():
             w_close = w_df['Close']; w_high = w_df['High']; w_low = w_df['Low']; w_vol = w_df['Volume']; w_open = w_df['Open']
             m_close = m_df['Close']; m_high = m_df['High']; m_low = m_df['Low']; m_vol = m_df['Volume']; m_open = m_df['Open']
 
-            # RRG
             rs_ratio = close / nifty_close.reindex(close.index, method='ffill')
             rs_ratio_norm = rs_ratio / rs_ratio.rolling(100, min_periods=10).mean()
             rs_mom = rs_ratio / rs_ratio.shift(20) - 1
@@ -576,12 +593,48 @@ if not st.session_state.data_loaded:
             st.stop()
 
 # =============================================================
-# 5. DISPLAY (SINGLE PAGE – COLAB STYLE)
+# 5. DISPLAY – MODERN SINGLE PAGE
 # =============================================================
 st.title("🏆 FINAL ETF SCANNER – 23 FILTERS + MACRO SECTOR RRG")
 st.caption(f"📌 Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Auto-updated on reload")
 
-# Show warnings if any
+# ---- Metrics Row ----
+display_df = st.session_state.display_df
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.markdown(f"""
+    <div class="metric-card" style="border-left-color: #4CAF50;">
+        <div class="label">📊 ETFs Scanned</div>
+        <div class="value">{len(display_df)}</div>
+    </div>
+    """, unsafe_allow_html=True)
+with col2:
+    avg_score = display_df['Filter_Score'].mean()
+    st.markdown(f"""
+    <div class="metric-card" style="border-left-color: #2196F3;">
+        <div class="label">⭐ Avg Score</div>
+        <div class="value">{avg_score:.1f}/23</div>
+    </div>
+    """, unsafe_allow_html=True)
+with col3:
+    top_score = display_df['Filter_Score'].max()
+    top_etf = display_df[display_df['Filter_Score']==top_score]['ETF'].values[0] if top_score>0 else 'N/A'
+    st.markdown(f"""
+    <div class="metric-card" style="border-left-color: #FF9800;">
+        <div class="label">🏆 Best Score</div>
+        <div class="value">{top_score} <span style="font-size:1rem;">({top_etf})</span></div>
+    </div>
+    """, unsafe_allow_html=True)
+with col4:
+    golden = len(display_df[display_df['Benchmark Result']=='🏆 Golden Chance'])
+    st.markdown(f"""
+    <div class="metric-card" style="border-left-color: #E91E63;">
+        <div class="label">💎 Golden Chances</div>
+        <div class="value">{golden}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ---- Warnings ----
 if st.session_state.warnings:
     with st.expander("⚠️ Warnings (click to expand)"):
         for w in st.session_state.warnings[:20]:
@@ -591,12 +644,12 @@ if st.session_state.warnings:
 
 # ---- Main Table ----
 st.subheader("📋 ETF Ranking (Sorted by RRG → RV → Filter_Score)")
-st.dataframe(st.session_state.display_df, use_container_width=True, height=600)
+st.dataframe(display_df, use_container_width=True, height=600)
 
 # ---- Download Excel ----
 excel_buffer = io.BytesIO()
 with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-    st.session_state.display_df.to_excel(writer, sheet_name='ETF Ranking', index=True)
+    display_df.to_excel(writer, sheet_name='ETF Ranking', index=True)
     if st.session_state.macro_avg is not None:
         st.session_state.macro_avg.to_excel(writer, sheet_name='Macro_RRG', index=False)
 excel_buffer.seek(0)
@@ -608,58 +661,74 @@ st.download_button(
     use_container_width=True
 )
 
-# ---- RRG Chart (Clean, Matplotlib) ----
+# ---- Interactive RRG Chart using Plotly (clean & modern) ----
 st.subheader("📊 RRG CHART (MACRO SECTOR AVERAGES)")
-st.caption("📌 દરેક Macro Sector (Broad Market, Financial Services, Commodities, વગેરે) માટે તેના બધા ETF નો સરેરાશ RS-Ratio અને RS-Momentum પ્લોટ થયેલ છે.")
+st.caption("📌 દરેક Macro Sector (Broad Market, Financial Services, Commodities, વગેરે) માટે તેના બધા ETF નો સરેરાશ RS-Ratio અને RS-Momentum પ્લોટ થયેલ છે. Hover for details.")
 
 macro_avg = st.session_state.macro_avg
 if macro_avg is not None and not macro_avg.empty:
-    fig, ax = plt.subplots(figsize=(16, 12))
-    ax.axhline(y=0, color='black', linestyle='-', linewidth=1)
-    ax.axvline(x=1, color='black', linestyle='-', linewidth=1)
+    fig = go.Figure()
 
-    # Quadrant labels
-    ax.text(1.25, 0.08, '🏆 LEADING', fontsize=16, weight='bold', color='green',
-            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', edgecolor='green', alpha=0.7))
-    ax.text(0.75, 0.08, '🟢 IMPROVING', fontsize=16, weight='bold', color='blue',
-            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', edgecolor='blue', alpha=0.7))
-    ax.text(0.75, -0.15, '🔴 LAGGING', fontsize=16, weight='bold', color='red',
-            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', edgecolor='red', alpha=0.7))
-    ax.text(1.25, -0.15, '🟡 WEAKENING', fontsize=16, weight='bold', color='orange',
-            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', edgecolor='orange', alpha=0.7))
+    # Quadrant lines
+    fig.add_hline(y=0, line_color="black", line_width=1.5)
+    fig.add_vline(x=1, line_color="black", line_width=1.5)
+
+    # Quadrant labels with semi-transparent backgrounds
+    fig.add_annotation(x=1.25, y=0.08, text="🏆 LEADING", showarrow=False,
+                       font=dict(size=18, color="green", family="Arial Black"),
+                       bgcolor="rgba(255,255,255,0.8)", bordercolor="green", borderwidth=1)
+    fig.add_annotation(x=0.75, y=0.08, text="🟢 IMPROVING", showarrow=False,
+                       font=dict(size=18, color="blue"),
+                       bgcolor="rgba(255,255,255,0.8)", bordercolor="blue", borderwidth=1)
+    fig.add_annotation(x=0.75, y=-0.15, text="🔴 LAGGING", showarrow=False,
+                       font=dict(size=18, color="red"),
+                       bgcolor="rgba(255,255,255,0.8)", bordercolor="red", borderwidth=1)
+    fig.add_annotation(x=1.25, y=-0.15, text="🟡 WEAKENING", showarrow=False,
+                       font=dict(size=18, color="orange"),
+                       bgcolor="rgba(255,255,255,0.8)", bordercolor="orange", borderwidth=1)
 
     # Plot points
     for idx, row in macro_avg.iterrows():
+        sector = row['Macro_Sector']
         x = row['RS_Ratio']
         y = row['RS_Momentum']
-        sector = row['Macro_Sector']
+        # Determine color and symbol
         if x > 1 and y > 0:
-            color, marker, edge = 'green', '^', 'darkgreen'
+            color, symbol = 'green', 'triangle-up'
         elif x < 1 and y > 0:
-            color, marker, edge = 'blue', 's', 'darkblue'
+            color, symbol = 'blue', 'square'
         elif x < 1 and y < 0:
-            color, marker, edge = 'red', 'v', 'darkred'
+            color, symbol = 'red', 'triangle-down'
         else:
-            color, marker, edge = 'orange', 'o', 'darkorange'
+            color, symbol = 'orange', 'circle'
 
-        ax.scatter(x, y, color=color, s=350, marker=marker, edgecolors=edge, linewidth=2, zorder=5)
-        ax.annotate(sector, (x, y), fontsize=11, weight='bold', xytext=(10, 10),
-                    textcoords='offset points',
-                    bbox=dict(boxstyle="round,pad=0.4", facecolor='white', edgecolor='gray', alpha=0.9),
-                    zorder=6)
+        fig.add_trace(go.Scatter(
+            x=[x], y=[y],
+            mode='markers+text',
+            name=sector,
+            marker=dict(size=25, color=color, symbol=symbol,
+                        line=dict(width=2, color='black')),
+            text=[sector],
+            textposition='top center',
+            hoverinfo='text',
+            hovertext=f"<b>{sector}</b><br>RS-Ratio: {x:.3f}<br>RS-Momentum: {y:.3f}",
+            showlegend=False
+        ))
 
-    x_min = max(0.4, macro_avg['RS_Ratio'].min() - 0.15)
-    x_max = min(1.6, macro_avg['RS_Ratio'].max() + 0.15)
-    y_min = max(-0.4, macro_avg['RS_Momentum'].min() - 0.05)
-    y_max = min(0.4, macro_avg['RS_Momentum'].max() + 0.05)
-    ax.set_xlim(x_min, x_max)
-    ax.set_ylim(y_min, y_max)
+    # Layout
+    fig.update_layout(
+        title=dict(text='📈 Relative Rotation Graph (Macro Sector Averages)', font=dict(size=24, color='#1a1a2e')),
+        xaxis=dict(title='RS-Ratio → 1 = Nifty Avg', range=[0.4, 1.6], gridcolor='lightgray'),
+        yaxis=dict(title='RS-Momentum (Speed of Change)', range=[-0.4, 0.4], gridcolor='lightgray'),
+        template='plotly_white',
+        height=700,
+        hovermode='closest',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=60, r=60, t=80, b=60)
+    )
 
-    ax.set_title('📈 RRG (Relative Rotation Graph) – MACRO SECTOR AVERAGES', fontsize=20, weight='bold')
-    ax.set_xlabel('Relative Strength (RS-Ratio) → 1 = Nifty Avg', fontsize=14)
-    ax.set_ylabel('RS-Momentum (Speed of Change)', fontsize=14)
-    ax.grid(True, linestyle='--', alpha=0.4)
-    st.pyplot(fig)
+    st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("No macro sector data available for RRG chart.")
 

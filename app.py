@@ -208,13 +208,14 @@ def cvd_positive(close, high, low, volume, open_):
     return cvd.iloc[-5:].sum() > 0
 
 # =============================================================
-# 3. MAIN SCAN FUNCTION (FIXED NIFTY LOADING)
+# 3. MAIN SCAN FUNCTION (FULLY ROBUST WITH FALLBACKS)
 # =============================================================
-def run_scan(progress_bar, status_text):
+def run_scan(progress_bar, status_text, warning_placeholder):
     results = []
     total_etfs = len(SCAN_ETFS)
+    warning_messages = []
     
-    # ========== LOAD NIFTY 50 WITH ERROR HANDLING ==========
+    # ========== LOAD NIFTY 50 ==========
     status_text.text("⏳ Loading Nifty 50...")
     try:
         nifty_df = yf.download("^NSEI", period="2y", progress=False)
@@ -223,14 +224,11 @@ def run_scan(progress_bar, status_text):
         nifty_close = nifty_df['Close'].dropna()
         if nifty_close.empty:
             raise ValueError("Nifty data is empty")
+        # success_msg = f"✅ Nifty loaded: {len(nifty_close)} days"
     except Exception as e:
-        # FALLBACK: Create a dummy series of 1s if Nifty fails
-        # This ensures the rest of the code doesn't crash
         nifty_close = pd.Series([1.0] * 500, 
                                 index=pd.date_range(end=pd.Timestamp.today(), periods=500, freq='D'))
-        status_text.text("⚠️ Nifty 50 not available, using fallback benchmark.")
-    
-    # Note: 'nifty_base' is removed because it was never used anywhere in the original logic.
+        warning_messages.append(f"⚠️ Nifty 50 not available, using fallback benchmark. ({e})")
     # =========================================================
 
     for idx, etf_base in enumerate(SCAN_ETFS):
@@ -239,60 +237,101 @@ def run_scan(progress_bar, status_text):
         
         symbol = etf_base + ".NS"
         try:
-            df = yf.download(symbol, period="2y", progress=False)
-            if df.empty or len(df) < 50: continue
+            # Download MAX data to ensure we have history
+            df = yf.download(symbol, period="max", progress=False)
+            
+            if df.empty:
+                warning_messages.append(f"⚠️ {etf_base}: No data returned.")
+                continue
 
+            # Ensure columns exist
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            
+            # Handle missing Close/Adj Close
+            if 'Close' not in df.columns:
+                if 'Adj Close' in df.columns:
+                    df['Close'] = df['Adj Close']
+                else:
+                    warning_messages.append(f"⚠️ {etf_base}: No 'Close' or 'Adj Close' column.")
+                    continue
+
+            # Ensure Open, High, Low exist, else fill with Close
+            for col in ['Open', 'High', 'Low']:
                 if col not in df.columns:
-                    if col == 'Close' and 'Adj Close' in df.columns: df['Close'] = df['Adj Close']
-                    else: df[col] = 0
+                    df[col] = df['Close']
+            
+            # ====== CRITICAL FIX FOR VOLUME ======
+            if 'Volume' not in df.columns or df['Volume'].isnull().all():
+                # If Volume is missing or all NaN, create a dummy volume series of 1s
+                df['Volume'] = 1
+                warning_messages.append(f"ℹ️ {etf_base}: Volume missing, using dummy volume=1.")
 
-            close = df['Close'].dropna()
-            high = df['High'].dropna()
-            low = df['Low'].dropna()
-            open_ = df['Open'].dropna()
-            volume = df['Volume'].dropna()
+            # Drop NaN rows (but keep 0 volume as valid)
+            df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
+            
+            if len(df) < 20:
+                warning_messages.append(f"⚠️ {etf_base}: Only {len(df)} days of data, skipping.")
+                continue
+
+            close = df['Close']
+            high = df['High']
+            low = df['Low']
+            open_ = df['Open']
+            volume = df['Volume']  # Volume can be dummy 1s or actual
+
+            # Common index alignment (Volume will always align now)
             common = close.index.intersection(high.index).intersection(low.index).intersection(volume.index)
-            if len(common) < 50: continue
-            close = close.loc[common]; high = high.loc[common]; low = low.loc[common]
-            open_ = open_.loc[common]; volume = volume.loc[common]
+            if len(common) < 20:
+                warning_messages.append(f"⚠️ {etf_base}: Only {len(common)} common days, skipping.")
+                continue
+                
+            close = close.loc[common]
+            high = high.loc[common]
+            low = low.loc[common]
+            open_ = open_.loc[common]
+            volume = volume.loc[common]
 
+            # Resample for weekly and monthly
             w_df = df.resample('W').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
             m_df = df.resample('M').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
+            
+            # Check if resampled data has enough rows
+            if len(w_df) < 10 or len(m_df) < 3:
+                # Sometimes resampling fails if data is too short, skip safely
+                warning_messages.append(f"⚠️ {etf_base}: Not enough data for weekly/monthly resampling.")
+                continue
+
             w_close = w_df['Close']; w_high = w_df['High']; w_low = w_df['Low']; w_vol = w_df['Volume']; w_open = w_df['Open']
             m_close = m_df['Close']; m_high = m_df['High']; m_low = m_df['Low']; m_vol = m_df['Volume']; m_open = m_df['Open']
 
-            # RS Ratio (using the fallback nifty_close if needed)
+            # ---- Calculate RS Ratio ----
             rs_ratio = close / nifty_close.reindex(close.index, method='ffill')
-            rs_ratio_norm = rs_ratio / rs_ratio.rolling(100).mean()
+            rs_ratio_norm = rs_ratio / rs_ratio.rolling(100, min_periods=10).mean()
             rs_mom = rs_ratio / rs_ratio.shift(20) - 1
             current_rs = rs_ratio_norm.iloc[-1] if len(rs_ratio_norm) > 0 else 1
             current_rs_mom = rs_mom.iloc[-1] if len(rs_mom) > 0 else 0
 
+            # RRG logic
             if current_rs > 1 and current_rs_mom > 0:
-                rrg_text = "Bullish (Leading)"
-                rrg_improving = False
+                rrg_text = "Bullish (Leading)"; rrg_improving = False
             elif current_rs < 1 and current_rs_mom > 0:
-                rrg_text = "Entering a bull market (Improving)"
-                rrg_improving = True
+                rrg_text = "Entering a bull market (Improving)"; rrg_improving = True
             elif current_rs < 1 and current_rs_mom < 0:
-                rrg_text = "Bearish (Lagging)"
-                rrg_improving = False
+                rrg_text = "Bearish (Lagging)"; rrg_improving = False
             elif current_rs > 1 and current_rs_mom < 0:
-                rrg_text = "Entering a bear market (Weakening)"
-                rrg_improving = False
+                rrg_text = "Entering a bear market (Weakening)"; rrg_improving = False
             else:
-                rrg_text = "Neutral"
-                rrg_improving = False
+                rrg_text = "Neutral"; rrg_improving = False
 
+            # RV logic
             f2_rv = False
             if len(rs_ratio) > 200:
                 if rs_ratio.iloc[-1] < rs_ratio.rolling(200).mean().iloc[-1]:
                     f2_rv = True
             rv_text = "Low Price Compared to Nifty" if f2_rv else "High Price Compared to Nifty"
 
+            # --- Filters ---
             w_rsi = calculate_rsi(w_close).iloc[-1] if len(w_close) >= 15 else 50
             m_rsi = calculate_rsi(m_close).iloc[-1] if len(m_close) >= 12 else 50
             f3 = w_rsi > 50
@@ -373,8 +412,16 @@ def run_scan(progress_bar, status_text):
                 'Risk': 'Near Top' if (close.iloc[-1] / close.rolling(252).max().iloc[-1]) > 0.95 else 'Safe'
             })
         except Exception as e:
-            pass # Silent skip for UI smoothness
+            warning_messages.append(f"❌ Error in {etf_base}: {str(e)[:100]}")
 
+    # Show warnings at the end
+    if warning_messages:
+        # Show first 10 warnings to avoid clutter
+        display_warnings = warning_messages[:15]
+        if len(warning_messages) > 15:
+            display_warnings.append(f"... and {len(warning_messages)-15} more warnings.")
+        warning_placeholder.warning("⚠️ Scan completed with warnings:\n" + "\n".join(display_warnings))
+    
     return results
 
 # =============================================================
@@ -385,11 +432,13 @@ if 'data_ready' not in st.session_state:
     st.session_state.display_df = None
     st.session_state.macro_avg = None
 
+warning_placeholder = st.empty()
+
 if st.button("🚀 Run Full ETF Scan (23 Filters + RRG)"):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    results = run_scan(progress_bar, status_text)
+    results = run_scan(progress_bar, status_text, warning_placeholder)
     
     if results:
         df = pd.DataFrame(results)
@@ -551,9 +600,11 @@ if st.button("🚀 Run Full ETF Scan (23 Filters + RRG)"):
         st.session_state.data_ready = True
         progress_bar.empty()
         status_text.text("✅ Scan Complete!")
-        st.success(f"✅ {len(results)} ETFs scanned successfully!")
+        st.success(f"✅ {len(results)} ETFs scanned successfully! Found data for {len(results)} ETFs.")
     else:
-        st.error("❌ No data found. Please try again.")
+        progress_bar.empty()
+        status_text.text("❌ Scan Failed")
+        st.error("❌ No data found for ANY ETF. Please check the warnings above. (Likely yfinance network issue).")
 
 # =============================================================
 # 5. DISPLAY RESULTS

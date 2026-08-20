@@ -160,7 +160,7 @@ MACRO_SECTOR_MAP = {
 SCAN_ETFS = [e for e in ETF_LIST if e not in ["LIQUIDCASE", "GROWWLIQID"]]
 
 # =============================================================
-# 2. HELPER FUNCTIONS (EXACT ORIGINAL – kept unchanged)
+# 2. HELPER FUNCTIONS (EXACT ORIGINAL – unchanged)
 # =============================================================
 def calculate_rsi(data, period=14):
     delta = data.diff()
@@ -563,10 +563,17 @@ def run_scan():
             display_df[col] = '-'
     display_df = display_df[final_cols]
 
-    macro_avg = df.groupby('Macro_Sector').agg({
+    # ---- FIX: Ensure macro_avg has exactly one row per Macro_Sector ----
+    macro_avg = df.groupby('Macro_Sector', as_index=False).agg({
         'RS_Ratio': 'mean',
         'RS_Momentum': 'mean'
-    }).reset_index()
+    })
+    # If any sector still has duplicates (shouldn't happen), force aggregation
+    if macro_avg.groupby('Macro_Sector').size().max() > 1:
+        macro_avg = macro_avg.groupby('Macro_Sector', as_index=False).agg({
+            'RS_Ratio': 'mean',
+            'RS_Momentum': 'mean'
+        })
 
     return display_df, macro_avg, warning_messages
 
@@ -661,12 +668,19 @@ st.download_button(
     use_container_width=True
 )
 
-# ---- Interactive RRG Chart using Plotly (clean & modern) ----
+# ---- FIXED: Interactive RRG Chart using Plotly (clean & modern) ----
 st.subheader("📊 RRG CHART (MACRO SECTOR AVERAGES)")
 st.caption("📌 દરેક Macro Sector (Broad Market, Financial Services, Commodities, વગેરે) માટે તેના બધા ETF નો સરેરાશ RS-Ratio અને RS-Momentum પ્લોટ થયેલ છે. Hover for details.")
 
 macro_avg = st.session_state.macro_avg
 if macro_avg is not None and not macro_avg.empty:
+    # Safety: Ensure only one point per sector
+    if macro_avg.groupby('Macro_Sector').size().max() > 1:
+        macro_avg = macro_avg.groupby('Macro_Sector', as_index=False).agg({
+            'RS_Ratio': 'mean',
+            'RS_Momentum': 'mean'
+        })
+
     fig = go.Figure()
 
     # Quadrant lines
@@ -687,7 +701,7 @@ if macro_avg is not None and not macro_avg.empty:
                        font=dict(size=18, color="orange"),
                        bgcolor="rgba(255,255,255,0.8)", bordercolor="orange", borderwidth=1)
 
-    # Plot points
+    # Plot points – one per sector
     for idx, row in macro_avg.iterrows():
         sector = row['Macro_Sector']
         x = row['RS_Ratio']

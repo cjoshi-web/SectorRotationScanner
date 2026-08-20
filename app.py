@@ -9,85 +9,32 @@ import sys
 import os
 import io
 from datetime import datetime
-import plotly.graph_objects as go
-from st_aggrid import AgGrid, GridOptionsBuilder
 
 # --- Setup ---
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore")
 sys.stderr = open(os.devnull, 'w')
 
-# =============================================================
-# PAGE CONFIG & MATERIAL-STYLE CSS
-# =============================================================
 st.set_page_config(
-    page_title="Ultimate ETF Scanner",
+    page_title="ETF Scanner",
     page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="wide"
 )
 
-# Custom CSS (Material-like)
+# Simple clean CSS (Colab-like)
 st.markdown("""
 <style>
     .main { padding: 0; }
     .block-container { padding-top: 1rem; padding-bottom: 1rem; }
-
-    .app-header {
-        background: linear-gradient(135deg, #1a237e, #0d47a1);
-        padding: 1.2rem 2rem;
-        border-radius: 20px;
-        color: white;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.2);
-        margin-bottom: 1.5rem;
-    }
-    .app-header h1 { margin: 0; font-size: 2rem; font-weight: 500; letter-spacing: 0.5px; }
-    .app-header .subtitle { font-size: 0.9rem; opacity: 0.85; }
-
-    .metric-card {
-        background: white;
-        border-radius: 16px;
-        padding: 1.2rem 0.8rem;
-        text-align: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        transition: transform 0.2s, box-shadow 0.2s;
-        border-bottom: 4px solid #3f51b5;
-    }
-    .metric-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-    }
-    .metric-card .label {
-        font-size: 0.8rem;
-        color: #757575;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .metric-card .value {
-        font-size: 2.2rem;
-        font-weight: 700;
-        color: #1a1a1a;
-        margin-top: 0.2rem;
-    }
-
-    @media (prefers-color-scheme: dark) {
-        .metric-card {
-            background: #1e293b;
-            border-bottom-color: #5c6bc0;
-        }
-        .metric-card .label { color: #94a3b8; }
-        .metric-card .value { color: #f1f5f9; }
-        .app-header { background: linear-gradient(135deg, #0f172a, #1e293b); }
-    }
+    .stDataFrame { width: 100%; }
+    .css-1r6slb0 { background: white; padding: 10px; border-radius: 8px; }
+    h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+    .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # =============================================================
-# 1. STATIC ETF LIST & MAPPING
+# 1. STATIC ETF LIST & MAPPING (EXACT ORIGINAL)
 # =============================================================
 ETF_LIST = [
     "LIQUIDCASE", "GROWWLIQID", "NIFTYBEES", "MOSMALL250", "SMALLCAP",
@@ -193,7 +140,7 @@ MACRO_SECTOR_MAP = {
 SCAN_ETFS = [e for e in ETF_LIST if e not in ["LIQUIDCASE", "GROWWLIQID"]]
 
 # =============================================================
-# 2. HELPER FUNCTIONS
+# 2. HELPER FUNCTIONS (EXACT ORIGINAL)
 # =============================================================
 def calculate_rsi(data, period=14):
     delta = data.diff()
@@ -279,9 +226,8 @@ def cvd_positive(close, high, low, volume, open_):
 # 3. MAIN SCAN FUNCTION (CACHED)
 # =============================================================
 @st.cache_data(ttl=3600)
-def run_scan_cached():
+def run_scan():
     results = []
-    total_etfs = len(SCAN_ETFS)
     warning_messages = []
     
     # Load Nifty
@@ -295,14 +241,13 @@ def run_scan_cached():
     except:
         nifty_close = pd.Series([1.0] * 500, 
                                 index=pd.date_range(end=pd.Timestamp.today(), periods=500, freq='D'))
-        warning_messages.append("⚠️ Nifty 50 not available, using fallback benchmark.")
+        warning_messages.append("⚠️ Nifty 50 not available, using fallback.")
     
     for etf_base in SCAN_ETFS:
         try:
             symbol = etf_base + ".NS"
             df = yf.download(symbol, period="max", progress=False)
             if df.empty:
-                warning_messages.append(f"⚠️ {etf_base}: No data.")
                 continue
 
             if isinstance(df.columns, pd.MultiIndex):
@@ -312,7 +257,6 @@ def run_scan_cached():
                 if 'Adj Close' in df.columns:
                     df['Close'] = df['Adj Close']
                 else:
-                    warning_messages.append(f"⚠️ {etf_base}: No close.")
                     continue
 
             for col in ['Open', 'High', 'Low']:
@@ -324,7 +268,6 @@ def run_scan_cached():
             
             df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
             if len(df) < 20:
-                warning_messages.append(f"⚠️ {etf_base}: Only {len(df)} days.")
                 continue
 
             close = df['Close']; high = df['High']; low = df['Low']; open_ = df['Open']; volume = df['Volume']
@@ -332,7 +275,7 @@ def run_scan_cached():
             if len(common) < 20: continue
             close = close.loc[common]; high = high.loc[common]; low = low.loc[common]; open_ = open_.loc[common]; volume = volume.loc[common]
 
-            # Resample with 'ME' for month end (fix for pandas 2.2+)
+            # Resample (fixed: 'ME' for month end)
             w_df = df.resample('W').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
             m_df = df.resample('ME').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
             if len(w_df) < 10 or len(m_df) < 3: continue
@@ -451,14 +394,14 @@ def run_scan_cached():
                 'Risk': 'Near Top' if (close.iloc[-1] / close.rolling(252).max().iloc[-1]) > 0.95 else 'Safe'
             })
         except Exception as e:
-            warning_messages.append(f"❌ Error in {etf_base}: {str(e)[:100]}")
+            warning_messages.append(f"❌ {etf_base}: {str(e)[:60]}")
 
     if not results:
         return None, None, warning_messages
 
     df = pd.DataFrame(results)
 
-    # Icons
+    # ---- Icons for filters ----
     df['F3_Icon'] = df['F3'].apply(lambda x: '✅' if x else '❌')
     df['F4_Icon'] = df['F4'].apply(lambda x: '✅' if x else '❌')
     df['F7_Icon'] = df['F7'].apply(lambda x: '✅' if x else '❌')
@@ -529,7 +472,7 @@ def run_scan_cached():
         return f"{len(true_names)}/3 True ({', '.join(true_names)})" if true_names else "0/3 True"
     df['Reversal Result'] = df.apply(reversal_result, axis=1)
 
-    # Final columns
+    # Rename
     rename_map = {
         'RRG_Text': 'RRG - (Sector v/s Nifty)',
         'RV_Text': 'RV (Sector v/s Nifty)',
@@ -620,8 +563,8 @@ if 'data_loaded' not in st.session_state:
     st.session_state.warnings = []
 
 if not st.session_state.data_loaded:
-    with st.spinner("🚀 Scanning all ETFs..."):
-        display_df, macro_avg, warnings_list = run_scan_cached()
+    with st.spinner("🚀 Scanning all ETFs... This may take 30-60 seconds."):
+        display_df, macro_avg, warnings_list = run_scan()
         if display_df is not None:
             st.session_state.display_df = display_df
             st.session_state.macro_avg = macro_avg
@@ -629,76 +572,33 @@ if not st.session_state.data_loaded:
             st.session_state.data_loaded = True
             st.rerun()
         else:
-            st.error("No data found. Please try again later.")
+            st.error("❌ No data found. Please check your internet connection.")
             st.stop()
 
 # =============================================================
-# 5. DISPLAY EVERYTHING ON ONE PAGE
+# 5. DISPLAY (SINGLE PAGE – COLAB STYLE)
 # =============================================================
-display_df = st.session_state.display_df
-macro_avg = st.session_state.macro_avg
+st.title("🏆 FINAL ETF SCANNER – 23 FILTERS + MACRO SECTOR RRG")
+st.caption(f"📌 Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Auto-updated on reload")
 
-# Header
-st.markdown("""
-<div class="app-header">
-    <div>
-        <h1>📈 Ultimate ETF Scanner</h1>
-        <div class="subtitle">23 Filters • Macro RRG • Auto-updated</div>
-    </div>
-    <div style="font-size:0.9rem; opacity:0.8;">{}</div>
-</div>
-""".format(datetime.now().strftime("%Y-%m-%d %H:%M")), unsafe_allow_html=True)
+# Show warnings if any
+if st.session_state.warnings:
+    with st.expander("⚠️ Warnings (click to expand)"):
+        for w in st.session_state.warnings[:20]:
+            st.write(w)
+        if len(st.session_state.warnings)>20:
+            st.write(f"... and {len(st.session_state.warnings)-20} more.")
 
-# Metrics Row
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="label">📊 ETFs Scanned</div>
-        <div class="value">{len(display_df)}</div>
-    </div>
-    """, unsafe_allow_html=True)
-with col2:
-    avg_score = display_df['Filter_Score'].mean()
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="label">⭐ Avg Score</div>
-        <div class="value">{avg_score:.1f}/23</div>
-    </div>
-    """, unsafe_allow_html=True)
-with col3:
-    top_score = display_df['Filter_Score'].max()
-    top_etf = display_df[display_df['Filter_Score']==top_score]['ETF'].values[0] if top_score>0 else 'N/A'
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="label">🏆 Best Score</div>
-        <div class="value">{top_score} <span style="font-size:1rem;">({top_etf})</span></div>
-    </div>
-    """, unsafe_allow_html=True)
-with col4:
-    golden = len(display_df[display_df['Benchmark Result']=='🏆 Golden Chance'])
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="label">💎 Golden Chances</div>
-        <div class="value">{golden}</div>
-    </div>
-    """, unsafe_allow_html=True)
+# ---- Main Table ----
+st.subheader("📋 ETF Ranking (Sorted by RRG → RV → Filter_Score)")
+st.dataframe(st.session_state.display_df, use_container_width=True, height=600)
 
-# Full Interactive Table (AgGrid)
-st.subheader("📋 ETF Ranking")
-gb = GridOptionsBuilder.from_dataframe(display_df)
-gb.configure_pagination(paginationAutoPageSize=True)
-gb.configure_side_bar(filters_panel=True, columns_panel=True)
-gb.configure_grid_options(domLayout='normal')
-gridOptions = gb.build()
-AgGrid(display_df, gridOptions=gridOptions, height=500, width='100%', theme='streamlit', allow_unsafe_jscode=True)
-
-# Download Button
+# ---- Download Excel ----
 excel_buffer = io.BytesIO()
 with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-    display_df.to_excel(writer, sheet_name='ETF Ranking', index=True)
-    if macro_avg is not None:
-        macro_avg.to_excel(writer, sheet_name='Macro_RRG', index=False)
+    st.session_state.display_df.to_excel(writer, sheet_name='ETF Ranking', index=True)
+    if st.session_state.macro_avg is not None:
+        st.session_state.macro_avg.to_excel(writer, sheet_name='Macro_RRG', index=False)
 excel_buffer.seek(0)
 st.download_button(
     label="⬇️ Download Excel Report",
@@ -708,61 +608,59 @@ st.download_button(
     use_container_width=True
 )
 
-# RRG Chart
-st.subheader("📊 RRG Chart – Macro Sector Averages")
-st.caption("🔄 Hover over points for details | Zoom & Pan with mouse")
+# ---- RRG Chart (Clean, Matplotlib) ----
+st.subheader("📊 RRG CHART (MACRO SECTOR AVERAGES)")
+st.caption("📌 દરેક Macro Sector (Broad Market, Financial Services, Commodities, વગેરે) માટે તેના બધા ETF નો સરેરાશ RS-Ratio અને RS-Momentum પ્લોટ થયેલ છે.")
+
+macro_avg = st.session_state.macro_avg
 if macro_avg is not None and not macro_avg.empty:
-    fig = go.Figure()
-    fig.add_hline(y=0, line_color="black", line_width=1)
-    fig.add_vline(x=1, line_color="black", line_width=1)
-    fig.update_layout(
-        annotations=[
-            dict(x=1.25, y=0.08, text="🏆 LEADING", showarrow=False, font=dict(size=16, color="green", family="Arial Black")),
-            dict(x=0.75, y=0.08, text="🟢 IMPROVING", showarrow=False, font=dict(size=16, color="blue")),
-            dict(x=0.75, y=-0.15, text="🔴 LAGGING", showarrow=False, font=dict(size=16, color="red")),
-            dict(x=1.25, y=-0.15, text="🟡 WEAKENING", showarrow=False, font=dict(size=16, color="orange"))
-        ]
-    )
+    fig, ax = plt.subplots(figsize=(16, 12))
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=1)
+    ax.axvline(x=1, color='black', linestyle='-', linewidth=1)
+
+    # Quadrant labels
+    ax.text(1.25, 0.08, '🏆 LEADING', fontsize=16, weight='bold', color='green',
+            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', edgecolor='green', alpha=0.7))
+    ax.text(0.75, 0.08, '🟢 IMPROVING', fontsize=16, weight='bold', color='blue',
+            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', edgecolor='blue', alpha=0.7))
+    ax.text(0.75, -0.15, '🔴 LAGGING', fontsize=16, weight='bold', color='red',
+            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', edgecolor='red', alpha=0.7))
+    ax.text(1.25, -0.15, '🟡 WEAKENING', fontsize=16, weight='bold', color='orange',
+            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', edgecolor='orange', alpha=0.7))
+
+    # Plot points
     for idx, row in macro_avg.iterrows():
-        sector = row['Macro_Sector']
         x = row['RS_Ratio']
         y = row['RS_Momentum']
-        if x > 1 and y > 0: color, symbol = 'green', 'triangle-up'
-        elif x < 1 and y > 0: color, symbol = 'blue', 'square'
-        elif x < 1 and y < 0: color, symbol = 'red', 'triangle-down'
-        else: color, symbol = 'orange', 'circle'
-        fig.add_trace(go.Scatter(
-            x=[x], y=[y],
-            mode='markers+text',
-            name=sector,
-            marker=dict(size=20, color=color, symbol=symbol, line=dict(width=2, color='black')),
-            text=[sector],
-            textposition='top center',
-            hoverinfo='text',
-            hovertext=f"{sector}<br>RS-Ratio: {x:.3f}<br>RS-Momentum: {y:.3f}"
-        ))
-    fig.update_layout(
-        title=dict(text='📈 Relative Rotation Graph', font=dict(size=20)),
-        xaxis=dict(title='RS-Ratio → 1 = Nifty Avg', range=[0.4, 1.6]),
-        yaxis=dict(title='RS-Momentum (Speed)', range=[-0.4, 0.4]),
-        template='plotly_white',
-        height=700,
-        hovermode='closest',
-        showlegend=False
-    )
-    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
-    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
-    st.plotly_chart(fig, use_container_width=True)
+        sector = row['Macro_Sector']
+        if x > 1 and y > 0:
+            color, marker, edge = 'green', '^', 'darkgreen'
+        elif x < 1 and y > 0:
+            color, marker, edge = 'blue', 's', 'darkblue'
+        elif x < 1 and y < 0:
+            color, marker, edge = 'red', 'v', 'darkred'
+        else:
+            color, marker, edge = 'orange', 'o', 'darkorange'
+
+        ax.scatter(x, y, color=color, s=350, marker=marker, edgecolors=edge, linewidth=2, zorder=5)
+        ax.annotate(sector, (x, y), fontsize=11, weight='bold', xytext=(10, 10),
+                    textcoords='offset points',
+                    bbox=dict(boxstyle="round,pad=0.4", facecolor='white', edgecolor='gray', alpha=0.9),
+                    zorder=6)
+
+    x_min = max(0.4, macro_avg['RS_Ratio'].min() - 0.15)
+    x_max = min(1.6, macro_avg['RS_Ratio'].max() + 0.15)
+    y_min = max(-0.4, macro_avg['RS_Momentum'].min() - 0.05)
+    y_max = min(0.4, macro_avg['RS_Momentum'].max() + 0.05)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+
+    ax.set_title('📈 RRG (Relative Rotation Graph) – MACRO SECTOR AVERAGES', fontsize=20, weight='bold')
+    ax.set_xlabel('Relative Strength (RS-Ratio) → 1 = Nifty Avg', fontsize=14)
+    ax.set_ylabel('RS-Momentum (Speed of Change)', fontsize=14)
+    ax.grid(True, linestyle='--', alpha=0.4)
+    st.pyplot(fig)
 else:
     st.info("No macro sector data available for RRG chart.")
 
-# Warnings (if any)
-if st.session_state.warnings:
-    with st.expander("⚠️ Scan Warnings", expanded=False):
-        for w in st.session_state.warnings[:20]:
-            st.write(w)
-        if len(st.session_state.warnings)>20:
-            st.write(f"... and {len(st.session_state.warnings)-20} more.")
-
-st.markdown("---")
-st.caption("🔄 Data cached for 1 hour. Reload page to refresh scan.")
+st.caption("🔄 Data cached for 1 hour. Reload the page to refresh the scan.")
